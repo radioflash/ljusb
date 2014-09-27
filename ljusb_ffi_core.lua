@@ -1,27 +1,7 @@
 local ffi = require'ffi'
 
 --[[
-TODO: 
-
-static inline uint16_t libusb_cpu_to_le16(const uint16_t x);
-
-static inline void libusb_fill_control_transfer(
-	struct libusb_transfer *transfer, libusb_device_handle *dev_handle,
-	unsigned char *buffer, libusb_transfer_cb_fn callback, void *user_data,
-	unsigned int timeout)
-{
-	struct libusb_control_setup *setup = (struct libusb_control_setup *)(void *) buffer;
-	transfer->dev_handle = dev_handle;
-	transfer->endpoint = 0;
-	transfer->type = LIBUSB_TRANSFER_TYPE_CONTROL;
-	transfer->timeout = timeout;
-	transfer->buffer = buffer;
-	if (setup)
-		transfer->length = (int) (LIBUSB_CONTROL_SETUP_SIZE
-			+ libusb_le16_to_cpu(setup->wLength));
-	transfer->user_data = user_data;
-	transfer->callback = callback;
-}
+TODO:
 
 static inline void libusb_fill_bulk_transfer(struct libusb_transfer *transfer,
 	libusb_device_handle *dev_handle, unsigned char endpoint,
@@ -185,6 +165,11 @@ typedef int (LIBUSB_CALL *libusb_hotplug_callback_fn)(struct libusb_context *ctx
 ]], 'LIBUSB_CALL', jit.os == 'Windows' and '__stdcall' or '')))
 
 ffi.cdef[[
+typedef struct timeval {
+  long tv_sec;
+  long tv_usec;
+} timeval;
+
 typedef intptr_t ssize_t;
 static const int LIBUSB_API_VERSION = 0x01000103;
 
@@ -413,7 +398,6 @@ struct libusb_control_setup {
 
 static const int LIBUSB_CONTROL_SETUP_SIZE = sizeof(struct libusb_control_setup);
 
-struct libusb_context;
 struct libusb_device;
 struct libusb_device_handle;
 struct libusb_hotplug_callback;
@@ -689,3 +673,19 @@ int libusb_hotplug_register_callback(libusb_context *ctx,
 void libusb_hotplug_deregister_callback(libusb_context *ctx,
 						libusb_hotplug_callback_handle handle);
 ]]
+
+local s, lib = pcall(ffi.load, jit.os == 'Windows' and 'libusb-1.0.dll' or 'libusb-1.0.so')
+--fallback: assume libusb statically linked into our executable (=> accessible via ffi.C)
+lib = s and lib or ffi.C
+
+local function getversion()
+  local v = lib.libusb_get_version()
+  return v.major, v.minor, v.micro, v.nano
+end
+
+local st, major = pcall(getversion)
+assert(st, "libusb_get_version call failed (make sure libusb-1.0 is present and visible to Lua)")
+assert(major == 1, "libusb version mismatch (need libusb-1.x.x)")
+
+return lib
+  
