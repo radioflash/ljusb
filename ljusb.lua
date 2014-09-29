@@ -27,6 +27,17 @@ local libusb_cpu_to_le16 = function(i)
   end
 end
 
+local tv = ffi.new'timeval[1]'
+tv[0].tv_sec = 0
+tv[0].tv_usec = 0
+local event_handler = function(usb)
+  jit.off(true, true)
+  while true do
+    usb:libusb_handle_events_timeout_completed(tv, nil)
+    sched.wait()
+  end
+end
+
 --contains Lua-implementations of all the libusb static-inline
 --functions, plus the higher level Lua API
 local methods = {
@@ -52,6 +63,12 @@ local methods = {
     
     return trf
   end,
+  
+  start_event_handler = function(usb)
+    --never jit compile this function
+    jit.off(true, true)
+    return sched.run(event_handler, usb)
+  end,
 }
 
 metatype('struct libusb_context', {
@@ -60,9 +77,15 @@ metatype('struct libusb_context', {
   end,
 })
 
+local intptr_t = typeof'intptr_t'
+
+--use transfer memory address as unique signal
+local addressof = function(t)
+  return tonumber(cast(intptr_t, t))
+end
+
 local scheduler_transfer_complete_cb = new('libusb_transfer_cb_fn', function(trf)
-  --io.write(string.format("transfer callback: %s\n", trf)) io.flush()
-  sched.schedule_signal(tonumber(trf), trf)
+  sched.schedule_signal(addressof(trf), trf)
 end)
 
 metatype('struct libusb_transfer', {
@@ -89,8 +112,10 @@ metatype('struct libusb_transfer', {
         --host to device transfer with data
         copy(t.buffer + C.LIBUSB_CONTROL_SETUP_SIZE, data, wLength)
       end
-      
       return t
+    end,
+    event_any = function(t)
+      return addressof(t)
     end,
     submit = function(t, dev_hnd, timeout)
       t.dev_handle = dev_hnd
@@ -98,10 +123,11 @@ metatype('struct libusb_transfer', {
       t.timeout = timeout or 0
       local err = core.libusb_submit_transfer(t)
       if err ~= C.LIBUSB_SUCCESS then
-        return nil, string(core.libusb_error_name(err))
+        io.write'transfer submit error'
+        return nil, ffi.string(core.libusb_error_name(err))
       end
-      return tonumber(t)
-    end
+      return t
+    end,
   },
   __gc = function(t)
     print"collecting transfer"
